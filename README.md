@@ -18,3 +18,18 @@ Otherwise, clone this repo, and follow the below specified commands:
 
  A list of dependencies is available in requirements.txt
 
+## Citation
+
+This project uses the dataset from [Predicting Stellar Class](www.kaggle.com/competitions/playground-series-s6e6/overview). If you use this work, please also cite the original dataset:
+
+> Author, Y. Yan, W. Reade, E. Park (2026). *train.csv* [Data set]. https://kaggle.com/competitions/playground-series-s6e6
+
+```bibtex
+@misc{playground-series-s6e6,
+    author = {Yao Yan, Walter Reade, Elizabeth Park},
+    title = {Predicting Stellar Class},
+    year = {2026},
+    howpublished = {\url{https://kaggle.com/competitions/playground-series-s6e6}},
+    note = {Kaggle}
+}
+```
