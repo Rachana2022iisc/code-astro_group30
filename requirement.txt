@@ -1,3 +1,0 @@
-Install the required Python packages:
-
-pip install numpy scipy astropy matplotlib
