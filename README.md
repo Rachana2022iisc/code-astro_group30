@@ -15,3 +15,5 @@ Otherwise, clone this repo, and follow the below specified commands:
 `pip install -e .`
 
  A list of dependencies is available in requirements.txt
+=======
+
