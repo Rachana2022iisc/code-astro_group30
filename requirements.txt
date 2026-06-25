@@ -3,4 +3,4 @@ pandas
 matplotlib.pyplot
 astroquery
 astropy
-sklearn
+scikit-learn

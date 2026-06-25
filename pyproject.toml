@@ -1,0 +1,28 @@
+[build-system]
+requires = [
+    "setuptools", 
+    "numpy",
+    "cython", 
+    "wheel"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orbitize"
+dynamic = ["version"]
+dependencies = [
+    "numpy",
+    "astropy>=4",
+    "scipy",
+    "matplotlib",
+    "pytest",
+    "pandas",
+    "astroquery",
+    "scikit-learn"
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "orbitize.__version__"}
+
+[tool.setuptools.packages]
+find = {}
