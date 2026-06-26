@@ -3,7 +3,7 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20933979.svg)](https://doi.org/10.5281/zenodo.20933979) [![A rectangular badge, half black half purple containing the text made at Code Astro](https://img.shields.io/badge/Made%20at-Code/Astro-blueviolet.svg)](https://semaphorep.github.io/codeastro/)
 
 ## Motivation
-Given a patch of sky, i.e. the RA/DEC, the package will import the sources from SDSS database, and will predict the class of the object. The prediction is based on a Supervised ML model using DecisionTree. For the purpose of using the package, we import the hyperparamters from the tuning directly. For the ones interested in training the model on their own database or reviewing the code, the files and dataset will be made avaialble on [Zenodo](https://doi.org/10.5281/zenodo.20933979)
+Given a patch of sky, i.e. the RA/DEC, the package will import the sources from SDSS database, and will predict the class of the object. The prediction is based on a Supervised ML model using DecisionTree. For the purpose of using the package, one needs the .joblib file that contains the information of the trained model. You can download it directly from [Zenodo](https://doi.org/10.5281/zenodo.20933979), along with the training data. The file is supposed to be placed in the root directory of the cloned repository. If you are interested, you can modify the code and re-train the model.
 
 ## Installation
 The package is installable on Python 3.x. To install the package, simply write:
