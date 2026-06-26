@@ -8,11 +8,11 @@ Given a patch of sky, i.e. the RA/DEC, the package will import the sources from 
 ## Installation
 The package is installable on Python 3.x. To install the package, simply write:
 
-`pip install `
+`pip install StellaClass`
 
 Otherwise, clone this repo, and follow the below specified commands:
 
-`cd `
+`cd StellaClass`
 
 `pip install -e .`
 
