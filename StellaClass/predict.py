@@ -23,7 +23,6 @@ import argparse
 from pathlib import Path
 from typing import Any, Optional
 
-import joblib
 import numpy as np
 import pandas as pd
 
@@ -259,30 +258,37 @@ def normalise_target(values: pd.Series) -> pd.Series:
     return labels.replace(CLASS_ALIASES)
 
 
-def make_random_forest(random_state: int = 42) -> Pipeline:
-    """ Create the classification pipeline used for both feature sets
+def make_random_forest(random_state: int = 42, rf_params: dict = None) -> Pipeline:
+    """Create the classification pipeline used for both feature sets.
 
     Builds a scikit-learn Pipeline that first imputes missing values with the
-    median, then classifies with a tuned RandomForestClassifier.
+    median, then classifies with a RandomForestClassifier whose hyperparameters
+    are loaded from hyperparameters.json when rf_params is supplied, or fall
+    back to the original defaults otherwise.
 
     Args:
-        random_state (int): Integer. Seed used to make the forest's training reproducible. Defaults to 42.
+        random_state (int): Seed used to make the forest's training reproducible. Defaults to 42.
+        rf_params (dict): RandomForest hyperparameters loaded from hyperparameters.json.
+            If None, the original hardcoded defaults are used as a fallback.
 
     Returns:
         Pipeline. Unfitted scikit-learn pipeline ready to be trained with .fit().
     """
+    params = rf_params or {
+        "n_estimators": 300,
+        "max_depth": 22,
+        "min_samples_split": 4,
+        "min_samples_leaf": 2,
+        "max_features": "sqrt",
+        "class_weight": "balanced_subsample",
+    }
     return Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
             (
                 "classifier",
                 RandomForestClassifier(
-                    n_estimators=300,
-                    max_depth=22,
-                    min_samples_split=4,
-                    min_samples_leaf=2,
-                    max_features="sqrt",
-                    class_weight="balanced_subsample",
+                    **params,
                     random_state=random_state,
                     n_jobs=-1,
                 ),
@@ -440,7 +446,8 @@ class StellarClassPredictor:
             model_name="u, g, r, i, z + colours",
             random_state=self.random_state,
         )
-        self.photo_model = make_random_forest(self.random_state)
+        hparams = load_hyperparameters()
+        self.photo_model = make_random_forest(self.random_state, hparams.get("photo_model"))
         self.photo_model.fit(data[PHOTO_FEATURES], y)
 
         redshift_rows = data[np.isfinite(data["redshift"])].copy()
@@ -456,10 +463,10 @@ class StellarClassPredictor:
                 model_name="u, g, r, i, z + colours + redshift",
                 random_state=self.random_state,
             )
-            self.redshift_model = make_random_forest(self.random_state)
+            self.redshift_model = make_random_forest(self.random_state, hparams.get("redshift_model"))
             self.redshift_model.fit(
                 redshift_rows[REDSHIFT_FEATURES], redshift_rows[target]
-            )
+            ) 
         else:
             self.redshift_model = None
             print(
@@ -474,6 +481,25 @@ class StellarClassPredictor:
             "photo_validation": photo_metrics,
             "redshift_validation": redshift_metrics,
         }
+
+        # Persist updated hyperparameters back to the repo JSON
+        save_hyperparameters({
+            "format_version": 1,
+            "random_state": self.random_state,
+            "photo_model": {
+                k: v for k, v in
+                self.photo_model.named_steps["classifier"].get_params().items()
+                if k not in ("random_state", "n_jobs")
+            },
+            "redshift_model": (
+                {
+                    k: v for k, v in
+                    self.redshift_model.named_steps["classifier"].get_params().items()
+                    if k not in ("random_state", "n_jobs")
+                }
+                if self.redshift_model is not None else None
+            ),
+        })
         return self
 
     def save(self, model_file: str | Path) -> Path:
@@ -1064,104 +1090,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Do not try the additional SDSS spectroscopic-redshift query",
     )
     return parser
-
-def run(mode="predict", data=None, save_model_path=None):
-    """
-    Entry point for training or running inference with the model.
-
-    Hyperparameters are always loaded from `hyperparameters.json` in the
-    repo root. After training, the JSON is automatically updated with the
-    new parameters so the repo stays in sync.
-
-    Parameters
-    ----------
-    mode : str, optional
-        Operation mode. One of:
-        - "predict" (default): loads hyperparameters, builds the model,
-          and returns predictions on the provided data.
-        - "train": loads hyperparameters as a starting point, fits the
-          model on the provided data, updates hyperparameters.json, and
-          optionally saves the full model weights to disk.
-
-    data : array-like or dict, optional
-        - In "predict" mode: pass the feature array directly, e.g. X.
-        - In "train" mode: pass a dict with keys "X" (features) and
-          "y" (labels), e.g. {"X": X_train, "y": y_train}.
-
-    save_model_path : str, optional
-        Only used in "train" mode. If provided, the fitted model is saved
-        as a joblib file at this path (e.g. "model.joblib"). This file
-        should NOT be committed to the repo — make sure *.joblib is in
-        your .gitignore.
-
-    Returns
-    -------
-    predictions : array-like
-        Returned in "predict" mode. The model's output for the input data.
-
-    model : estimator
-        Returned in "train" mode. The fitted model object.
-
-    Raises
-    ------
-    FileNotFoundError
-        If hyperparameters.json is missing from the repo root.
-    ValueError
-        If an unrecognised mode is passed.
-
-    Examples
-    --------
-    Predict using committed hyperparameters:
-
-        >>> from your_package import run
-        >>> predictions = run(mode="predict", data=X_test)
-
-    Retrain and update hyperparameters.json:
-
-        >>> model = run(
-        ...     mode="train",
-        ...     data={"X": X_train, "y": y_train},
-        ...     save_model_path="model.joblib"
-        ... )
-    """
-    hparams = load_hyperparameters()
-
-    if mode == "predict":
-        model = _build_model(hparams)
-        return model.predict(data)
-
-    elif mode == "train":
-        model = _build_model(hparams)
-        model.fit(data["X"], data["y"])
-        save_hyperparameters(model.get_params(deep=True))
-        if save_model_path:
-            joblib.dump(model, save_model_path)
-        return model
-
-    else:
-        raise ValueError(f"Unknown mode '{mode}'. Choose 'predict' or 'train'.")
-
-
-def _build_model(hparams):
-    """
-    Instantiate the model with the given hyperparameters.
-
-    This is a private helper used internally by `run()`. Swap out the
-    model class here if you change the underlying estimator.
-
-    Parameters
-    ----------
-    hparams : dict
-        Dictionary of hyperparameter names and values, as loaded from
-        hyperparameters.json. Must be compatible with the model's
-        constructor signature.
-
-    Returns
-    -------
-    model : estimator
-        An unfitted model instance configured with the given hyperparameters.
-    """
-    return RandomForestClassifier(**hparams)
 
 def main() -> int:
     """ Run the end-to-end command-line workflow
