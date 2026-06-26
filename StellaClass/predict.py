@@ -101,13 +101,33 @@ CLASS_ALIASES = {
 
 
 def canonical_name(name: Any) -> str:
-    """Convert a column name to the standard form used by this script."""
+    """ Convert a column name to the standard form used by this script
+
+    Normalises spacing and casing, then maps known synonyms (for example
+    'obj_id' or 'alpha') to the canonical column name used internally.
+
+    Args:
+        name (Any): Any. Column name to normalise. Will be converted to a string before processing.
+
+    Returns:
+        String. The lower-case, underscore-separated, alias-resolved column name.
+    """
     clean = str(name).strip().lower().replace(" ", "_")
     return COLUMN_ALIASES.get(clean, clean)
 
 
 def normalise_columns(data: pd.DataFrame) -> pd.DataFrame:
-    """Return a copy whose column names are lower-case and standardised."""
+    """ Return a copy whose column names are lower-case and standardised
+
+    Renames every column using canonical_name and raises an error if two
+    columns end up sharing the same standardised name.
+
+    Args:
+        data (DataFrame): DataFrame. Table whose columns need to be standardised.
+
+    Returns:
+        DataFrame. Copy of data with renamed columns. Raises ValueError if renaming produces duplicate column names.
+    """
     output = data.copy()
     output.columns = [canonical_name(column) for column in output.columns]
 
@@ -121,7 +141,18 @@ def normalise_columns(data: pd.DataFrame) -> pd.DataFrame:
 
 
 def to_dataframe(data: Any) -> pd.DataFrame:
-    """Convert a pandas table, Astropy Table, dictionary, or array to DataFrame."""
+    """ Convert a pandas table, Astropy Table, dictionary, or array to DataFrame
+
+    Accepts several common input shapes and converts each into a DataFrame
+    with u, g, r, i, z (and optionally redshift) columns so the rest of the
+    pipeline can work with a single, consistent input type.
+
+    Args:
+        data (Any): Any. A pandas DataFrame/Series, an Astropy Table, a dictionary of scalar or array-like values, or a 1D/2D array-like ordered as u, g, r, i, z[, redshift].
+
+    Returns:
+        DataFrame. Standardised table representation of the input. Raises TypeError if data does not match any of the supported input shapes.
+    """
     if isinstance(data, pd.DataFrame):
         return data.copy()
 
@@ -156,7 +187,18 @@ def to_dataframe(data: Any) -> pd.DataFrame:
 
 
 def add_features(data: pd.DataFrame) -> pd.DataFrame:
-    """Clean the magnitudes and create SDSS colour features."""
+    """ Clean the magnitudes and create SDSS colour features
+
+    Standardises column names, coerces the ugriz magnitudes and redshift to
+    numeric values, discards values outside plausible physical ranges, and
+    derives the colour-index and log1p(redshift) features used by the model.
+
+    Args:
+        data (DataFrame): DataFrame. Table containing at least the u, g, r, i, z magnitude columns, optionally including a redshift column.
+
+    Returns:
+        DataFrame. Copy of data with cleaned magnitudes plus the added colour-index and log1p_redshift feature columns. Raises ValueError if one or more required magnitude columns are missing.
+    """
     df = normalise_columns(data)
 
     missing = [column for column in MAGNITUDE_COLUMNS if column not in df.columns]
@@ -192,7 +234,18 @@ def add_features(data: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalise_target(values: pd.Series) -> pd.Series:
-    """Convert class labels to GALAXY, QSO, and STAR."""
+    """ Convert class labels to GALAXY, QSO, and STAR
+
+    Supports a previously label-encoded target (0/1/2) as well as free-text
+    labels, mapping known synonyms such as 'GAL' or 'QUASAR' onto the three
+    canonical class names.
+
+    Args:
+        values (Series): Series. Class labels to normalise, either numeric codes (0=GALAXY, 1=QSO, 2=STAR) or string labels.
+
+    Returns:
+        Series. Class labels standardised to 'GALAXY', 'QSO', or 'STAR'.
+    """
     # Support a previously LabelEncoded target: 0=GALAXY, 1=QSO, 2=STAR.
     numeric = pd.to_numeric(values, errors="coerce")
     finite_numeric = numeric.dropna()
@@ -204,7 +257,17 @@ def normalise_target(values: pd.Series) -> pd.Series:
 
 
 def make_random_forest(random_state: int = 42) -> Pipeline:
-    """Create the classification pipeline used for both feature sets."""
+    """ Create the classification pipeline used for both feature sets
+
+    Builds a scikit-learn Pipeline that first imputes missing values with the
+    median, then classifies with a tuned RandomForestClassifier.
+
+    Args:
+        random_state (int): Integer. Seed used to make the forest's training reproducible. Defaults to 42.
+
+    Returns:
+        Pipeline. Unfitted scikit-learn pipeline ready to be trained with .fit().
+    """
     return Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
@@ -226,9 +289,28 @@ def make_random_forest(random_state: int = 42) -> Pipeline:
 
 
 class StellarClassPredictor:
-    """Train, save, load, and apply the GALAXY/QSO/STAR classifiers."""
+    """ Train, save, load, and apply the GALAXY/QSO/STAR classifiers
+
+    Wraps two RandomForest pipelines: one trained on photometry and colours
+    alone, and one trained on photometry, colours, and redshift, used
+    whenever redshift is available for a given object.
+
+    Attributes:
+        random_state (int): Integer. Seed used for training and validation splits.
+        photo_model (Pipeline): Pipeline. Fitted model using only photometric features. None until trained.
+        redshift_model (Pipeline): Pipeline. Fitted model that also uses redshift. None until trained, or if redshift data was insufficient.
+        training_summary (dict): Dictionary. Metrics and row counts recorded after the most recent fit_csv call.
+    """
 
     def __init__(self, random_state: int = 42):
+        """ Create an untrained predictor
+
+        Args:
+            random_state (int): Integer. Seed used for training and validation splits. Defaults to 42.
+
+        Returns:
+            None.
+        """
         self.random_state = random_state
         self.photo_model: Optional[Pipeline] = None
         self.redshift_model: Optional[Pipeline] = None
@@ -241,7 +323,21 @@ class StellarClassPredictor:
         model_name: str,
         random_state: int,
     ) -> dict[str, float]:
-        """Evaluate a fresh model on a held-out validation sample."""
+        """ Evaluate a fresh model on a held-out validation sample
+
+        Splits the data, trains a throwaway RandomForest pipeline on 80% of
+        it, and prints an accuracy/F1 report on the remaining 20%. Skipped
+        when there are too few rows or too few examples of any class.
+
+        Args:
+            X (DataFrame): DataFrame. Feature matrix to validate on.
+            y (Series): Series. Class labels matching the rows of X.
+            model_name (string): String. Label used in the printed validation report.
+            random_state (int): Integer. Seed used for the train/validation split and the throwaway model.
+
+        Returns:
+            Dictionary. Contains 'accuracy' and 'macro_f1' as floats, or NaN for both if validation was skipped.
+        """
         class_counts = y.value_counts()
         if len(y) < 20 or class_counts.min() < 3:
             print(f"\nSkipping validation report for {model_name}: too few rows.")
@@ -279,7 +375,20 @@ class StellarClassPredictor:
         return {"accuracy": float(accuracy), "macro_f1": float(macro_f1)}
 
     def fit_csv(self, train_csv: str | Path, target: str = "class") -> "StellarClassPredictor":
-        """Train the classifiers from a labelled CSV file."""
+        """ Train the classifiers from a labelled CSV file
+
+        Reads and cleans the CSV, fits the photometry-only model on all
+        valid rows, and additionally fits a photometry+redshift model
+        whenever enough rows with finite redshift and all three classes
+        are available.
+
+        Args:
+            train_csv (string or Path): String or Path. Path to a CSV file containing u, g, r, i, z, and a class column (optionally also a redshift column).
+            target (string): String. Name of the column holding the class label. Defaults to 'class'.
+
+        Returns:
+            StellarClassPredictor. This instance, now fitted, to allow method chaining. Raises FileNotFoundError if train_csv does not exist, or ValueError if the target column is missing, no valid rows remain after cleaning, or not all three classes are present.
+        """
         train_path = Path(train_csv).expanduser().resolve()
         if not train_path.exists():
             raise FileNotFoundError(
@@ -365,7 +474,18 @@ class StellarClassPredictor:
         return self
 
     def save(self, model_file: str | Path) -> Path:
-        """Save fitted sklearn objects without pickling this custom class."""
+        """ Save fitted sklearn objects without pickling this custom class
+
+        Bundles the photo model, redshift model, random state, and training
+        summary into a dictionary and writes it with joblib, so the saved
+        file does not depend on this class's source code to reload.
+
+        Args:
+            model_file (string or Path): String or Path. Destination path for the saved .joblib file. Parent directories are created if needed.
+
+        Returns:
+            Path. Resolved path of the saved model file. Raises RuntimeError if called before the predictor has been trained.
+        """
         if self.photo_model is None:
             raise RuntimeError("The model must be trained before it can be saved.")
 
@@ -383,7 +503,14 @@ class StellarClassPredictor:
 
     @classmethod
     def load(cls, model_file: str | Path) -> "StellarClassPredictor":
-        """Load a previously trained model bundle."""
+        """ Load a previously trained model bundle
+
+        Args:
+            model_file (string or Path): String or Path. Path to a .joblib file previously produced by save().
+
+        Returns:
+            StellarClassPredictor. New instance populated with the saved photo model, redshift model, random state, and training summary. Raises TypeError if the loaded file is not a model bundle produced by this script.
+        """
         path = Path(model_file).expanduser().resolve()
         bundle = joblib.load(path)
 
@@ -406,6 +533,17 @@ class StellarClassPredictor:
         indices: pd.Index,
         probability_table: pd.DataFrame,
     ) -> None:
+        """ Write a model's per-class probabilities into a shared probability table
+
+        Args:
+            model (Pipeline): Pipeline. Fitted classifier exposing predict_proba and classes_.
+            X (DataFrame): DataFrame. Feature rows to score with model.
+            indices (Index): Index. Row labels of probability_table that correspond to X.
+            probability_table (DataFrame): DataFrame. Table of per-class probabilities, modified in place.
+
+        Returns:
+            None. probability_table is updated in place.
+        """
         probabilities = model.predict_proba(X)
         model_classes = [str(value).upper() for value in model.classes_]
 
@@ -414,7 +552,19 @@ class StellarClassPredictor:
                 probability_table.loc[indices, class_name] = probabilities[:, class_index]
 
     def predict(self, objects: Any) -> pd.DataFrame:
-        """Predict class and percentage confidence for one or more objects."""
+        """ Predict class and percentage confidence for one or more objects
+
+        Cleans the input, chooses the redshift model for rows with a finite
+        redshift (when available) and the photometry-only model otherwise,
+        then attaches the predicted class, per-class confidence percentages,
+        which model was used, and a warning about any imputed magnitudes.
+
+        Args:
+            objects (Any): Any. One or more objects to classify, in any form accepted by to_dataframe (DataFrame, Astropy Table, dictionary, or array).
+
+        Returns:
+            DataFrame. Copy of the input with added columns: predicted_class, confidence_%, P_GALAXY_%, P_QSO_%, P_STAR_%, model_used, and input_warning. Raises RuntimeError if called before training or if a row receives invalid probabilities, or ValueError if there are no rows to predict or a row has no usable ugriz magnitudes.
+        """
         if self.photo_model is None:
             raise RuntimeError("No fitted model is available.")
 
@@ -484,7 +634,11 @@ class StellarClassPredictor:
 
 
 def require_astronomy_packages() -> None:
-    """Raise a readable error if Astropy/Astroquery are unavailable."""
+    """ Raise a readable error if Astropy/Astroquery are unavailable
+
+    Returns:
+        None. Returns silently if both packages imported successfully. Raises ImportError if astropy or astroquery could not be imported, with installation instructions.
+    """
     if ASTRONOMY_IMPORT_ERROR is not None:
         raise ImportError(
             "The SDSS query requires astropy and astroquery. Install them with:\n"
@@ -493,7 +647,19 @@ def require_astronomy_packages() -> None:
 
 
 def parse_sky_position(ra: str | float, dec: str | float) -> coord.SkyCoord:
-    """Accept sexagesimal strings or decimal-degree coordinates."""
+    """ Accept sexagesimal strings or decimal-degree coordinates
+
+    Tries, in order: numeric decimal degrees, sexagesimal strings such as
+    '10h05m54.678s', space-separated sexagesimal strings, and finally
+    plain numeric strings, returning as soon as one interpretation succeeds.
+
+    Args:
+        ra (string or float): String or float. Right ascension, e.g. '10h05m54.678s' or a decimal-degree value.
+        dec (string or float): String or float. Declination, e.g. '+31d22m27.476s' or a decimal-degree value.
+
+    Returns:
+        SkyCoord. Astropy sky coordinate in the ICRS frame. Raises ValueError if none of the supported coordinate formats could be parsed.
+    """
     # Numeric values mean decimal degrees.
     if isinstance(ra, (int, float)) and isinstance(dec, (int, float)):
         return coord.SkyCoord(ra=float(ra) * u.deg, dec=float(dec) * u.deg, frame="icrs")
@@ -533,7 +699,20 @@ def parse_sky_position(ra: str | float, dec: str | float) -> coord.SkyCoord:
 
 
 class PredictingStellarClass:
-    """Query an SDSS coordinate and immediately classify every match."""
+    """ Query an SDSS coordinate and immediately classify every match
+
+    Wraps an SDSS cone search at a given position and radius, optionally
+    attaching spectroscopic redshift, so the resulting table can be passed
+    straight to a fitted StellarClassPredictor.
+
+    Attributes:
+        ra (string or float): String or float. Right ascension of the search position.
+        dec (string or float): String or float. Declination of the search position.
+        radius_arcsec (float): Float. Search radius in arcseconds.
+        data_release (int): Integer. SDSS data release number to query.
+        try_redshift (bool): Boolean. Whether to additionally try to fetch a spectroscopic redshift.
+        position (SkyCoord): SkyCoord. Parsed sky coordinate used for the SDSS query.
+    """
 
     def __init__(
         self,
@@ -543,6 +722,18 @@ class PredictingStellarClass:
         data_release: int = SDSS_DATA_RELEASE,
         try_redshift: bool = True,
     ) -> None:
+        """ Create a query for a single sky position
+
+        Args:
+            ra (string or float): String or float. Right ascension, sexagesimal or decimal degrees.
+            dec (string or float): String or float. Declination, sexagesimal or decimal degrees.
+            radius_arcsec (float): Float. SDSS cone-search radius in arcseconds. Defaults to 1.0.
+            data_release (int): Integer. SDSS data release to query. Defaults to SDSS_DATA_RELEASE.
+            try_redshift (bool): Boolean. Whether to also attempt fetching a spectroscopic redshift. Defaults to True.
+
+        Returns:
+            None. Raises ImportError if astropy/astroquery are not installed, or ValueError if ra/dec cannot be parsed into a sky position.
+        """
         require_astronomy_packages()
         self.ra = ra
         self.dec = dec
@@ -552,7 +743,15 @@ class PredictingStellarClass:
         self.position = parse_sky_position(ra, dec)
 
     def data_call(self) -> pd.DataFrame:
-        """Download objID, coordinates, and ugriz photometry from SDSS."""
+        """ Download objID, coordinates, and ugriz photometry from SDSS
+
+        Runs an SDSS cone search around self.position, adds each match's
+        angular separation from the requested position, sorts by that
+        separation, and optionally attaches a spectroscopic redshift.
+
+        Returns:
+            DataFrame. Photometric matches with objid, ra, dec, u, g, r, i, z, separation_arcsec, and (if requested) redshift, sorted by separation. Raises LookupError if no SDSS photometric object is found within the search radius.
+        """
         radius = self.radius_arcsec * u.arcsec
 
         xid = SDSS.query_region(
@@ -588,7 +787,18 @@ class PredictingStellarClass:
         return photometry
 
     def _attach_spectroscopic_redshift(self, photometry: pd.DataFrame) -> pd.DataFrame:
-        """Attach SDSS spectroscopic z as a separate column named redshift."""
+        """ Attach SDSS spectroscopic z as a separate column named redshift
+
+        Queries SDSS for spectroscopic matches, joins them to the
+        photometry table first by exact objid and then, for any rows still
+        missing a redshift, by nearest sky position within the search radius.
+
+        Args:
+            photometry (DataFrame): DataFrame. Photometric table to attach a redshift column to. Must include 'objid', 'ra', and 'dec' for matching.
+
+        Returns:
+            DataFrame. Copy of photometry with a redshift column, populated with NaN for any rows with no spectroscopic match.
+        """
         output = photometry.copy()
         output["redshift"] = np.nan
 
@@ -669,7 +879,14 @@ class PredictingStellarClass:
         return output
 
     def predict(self, predictor: StellarClassPredictor) -> pd.DataFrame:
-        """Download the SDSS data and apply the fitted model."""
+        """ Download the SDSS data and apply the fitted model
+
+        Args:
+            predictor (StellarClassPredictor): StellarClassPredictor. Fitted predictor used to classify the downloaded SDSS objects.
+
+        Returns:
+            DataFrame. SDSS photometric matches with added prediction columns, as returned by StellarClassPredictor.predict.
+        """
         sdss_data = self.data_call()
         return predictor.predict(sdss_data)
 
@@ -679,7 +896,16 @@ def load_or_train_predictor(
     model_file: str | Path,
     retrain: bool = False,
 ) -> StellarClassPredictor:
-    """Load a saved model, or train and save one when necessary."""
+    """ Load a saved model, or train and save one when necessary
+
+    Args:
+        train_csv (string or Path): String or Path. Path to the labelled training CSV, used only if a new model needs to be trained.
+        model_file (string or Path): String or Path. Path to the saved .joblib model file.
+        retrain (bool): Boolean. If True, train a fresh model even when a saved one already exists at model_file. Defaults to False.
+
+    Returns:
+        StellarClassPredictor. A predictor that is either freshly loaded from disk or newly trained and saved.
+    """
     model_path = Path(model_file).expanduser().resolve()
 
     if model_path.exists() and not retrain:
@@ -717,6 +943,18 @@ def predict_sdss_coordinates(
             dec="+31d22m27.476s",
             radius_arcsec=1.0,
         )
+
+    Args:
+        ra (string or float): String or float. Right ascension of the search position, sexagesimal or decimal degrees.
+        dec (string or float): String or float. Declination of the search position, sexagesimal or decimal degrees.
+        radius_arcsec (float): Float. SDSS cone-search radius in arcseconds. Defaults to 1.0.
+        model_file (string or Path): String or Path. Path to a previously saved .joblib model. Defaults to DEFAULT_MODEL_FILE.
+        try_redshift (bool): Boolean. Whether to also attempt fetching a spectroscopic redshift. Defaults to True.
+        output_csv (string or Path): String or Path. If given, the full prediction table is also written to this CSV path. Defaults to None.
+        show_result (bool): Boolean. Whether to print a formatted prediction summary. Defaults to True.
+
+    Returns:
+        DataFrame. SDSS photometric matches with predicted_class, confidence_%, per-class probability, model_used, and input_warning columns. Raises FileNotFoundError if the model file does not exist, or LookupError if no SDSS photometric object is found within the search radius.
     """
     model_path = Path(model_file).expanduser().resolve()
     if not model_path.exists():
@@ -748,7 +986,14 @@ def predict_sdss_coordinates(
     return result
 
 def print_prediction_summary(result: pd.DataFrame) -> None:
-    """Print the most useful columns without truncating the probabilities."""
+    """ Print the most useful columns without truncating the probabilities
+
+    Args:
+        result (DataFrame): DataFrame. Prediction table as returned by StellarClassPredictor.predict, expected to include predicted_class and the P_*_% confidence columns.
+
+    Returns:
+        None. Output is printed to standard output.
+    """
     preferred_columns = [
         "objid",
         "ra",
@@ -786,6 +1031,11 @@ def print_prediction_summary(result: pd.DataFrame) -> None:
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
+    """ Build the command-line argument parser for this script
+
+    Returns:
+        ArgumentParser. Parser configured with --ra, --dec, --radius, --train, --model, --output, --retrain, and --no-redshift options.
+    """
     parser = argparse.ArgumentParser(
         description="Query SDSS and predict GALAXY, QSO, or STAR in one run."
     )
@@ -814,6 +1064,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    """ Run the end-to-end command-line workflow
+
+    Loads or trains the model according to the CLI arguments, queries SDSS
+    at the requested coordinates, prints the prediction summary, and writes
+    the full results to a CSV file.
+
+    Returns:
+        Integer. Exit code 0 on success.
+    """
     args = build_argument_parser().parse_args()
 
     predictor = load_or_train_predictor(
