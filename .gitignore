@@ -25,6 +25,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+*.joblib
+*.pkl
 
 # PyInstaller
 #   Usually these files are written by a python script from a template
@@ -216,3 +218,5 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+*.joblib
+*.pkl

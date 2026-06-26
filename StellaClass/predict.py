@@ -44,6 +44,9 @@ from sklearn.metrics import accuracy_score, classification_report, f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 
+import joblib
+from .hyperparams import load_hyperparameters, save_hyperparameters
+
 
 DEFAULT_RA = "10h05m54.678s"
 DEFAULT_DEC = "+31d22m27.476s"
@@ -1062,6 +1065,103 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     return parser
 
+def run(mode="predict", data=None, save_model_path=None):
+    """
+    Entry point for training or running inference with the model.
+
+    Hyperparameters are always loaded from `hyperparameters.json` in the
+    repo root. After training, the JSON is automatically updated with the
+    new parameters so the repo stays in sync.
+
+    Parameters
+    ----------
+    mode : str, optional
+        Operation mode. One of:
+        - "predict" (default): loads hyperparameters, builds the model,
+          and returns predictions on the provided data.
+        - "train": loads hyperparameters as a starting point, fits the
+          model on the provided data, updates hyperparameters.json, and
+          optionally saves the full model weights to disk.
+
+    data : array-like or dict, optional
+        - In "predict" mode: pass the feature array directly, e.g. X.
+        - In "train" mode: pass a dict with keys "X" (features) and
+          "y" (labels), e.g. {"X": X_train, "y": y_train}.
+
+    save_model_path : str, optional
+        Only used in "train" mode. If provided, the fitted model is saved
+        as a joblib file at this path (e.g. "model.joblib"). This file
+        should NOT be committed to the repo — make sure *.joblib is in
+        your .gitignore.
+
+    Returns
+    -------
+    predictions : array-like
+        Returned in "predict" mode. The model's output for the input data.
+
+    model : estimator
+        Returned in "train" mode. The fitted model object.
+
+    Raises
+    ------
+    FileNotFoundError
+        If hyperparameters.json is missing from the repo root.
+    ValueError
+        If an unrecognised mode is passed.
+
+    Examples
+    --------
+    Predict using committed hyperparameters:
+
+        >>> from your_package import run
+        >>> predictions = run(mode="predict", data=X_test)
+
+    Retrain and update hyperparameters.json:
+
+        >>> model = run(
+        ...     mode="train",
+        ...     data={"X": X_train, "y": y_train},
+        ...     save_model_path="model.joblib"
+        ... )
+    """
+    hparams = load_hyperparameters()
+
+    if mode == "predict":
+        model = _build_model(hparams)
+        return model.predict(data)
+
+    elif mode == "train":
+        model = _build_model(hparams)
+        model.fit(data["X"], data["y"])
+        save_hyperparameters(model.get_params(deep=True))
+        if save_model_path:
+            joblib.dump(model, save_model_path)
+        return model
+
+    else:
+        raise ValueError(f"Unknown mode '{mode}'. Choose 'predict' or 'train'.")
+
+
+def _build_model(hparams):
+    """
+    Instantiate the model with the given hyperparameters.
+
+    This is a private helper used internally by `run()`. Swap out the
+    model class here if you change the underlying estimator.
+
+    Parameters
+    ----------
+    hparams : dict
+        Dictionary of hyperparameter names and values, as loaded from
+        hyperparameters.json. Must be compatible with the model's
+        constructor signature.
+
+    Returns
+    -------
+    model : estimator
+        An unfitted model instance configured with the given hyperparameters.
+    """
+    return RandomForestClassifier(**hparams)
 
 def main() -> int:
     """ Run the end-to-end command-line workflow
@@ -1119,3 +1219,4 @@ if __name__ == "__main__":
         print("\nRequired packages:")
         print("pip install numpy pandas scikit-learn joblib astropy astroquery")
         raise SystemExit(1)
+
